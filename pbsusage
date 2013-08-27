@@ -1,0 +1,158 @@
+#!/usr/bin/perl
+
+# Author : Sabuj Pattanayek <sabujp@gmail.com>
+# Purpose : See usage()
+# Version : git
+
+use Getopt::Std;
+
+getopts("s:h", \%options);
+
+if (defined($options{h})) {
+	usage();
+}
+
+sub usage {
+	print "Wrapper for qstat that shows users and how many resources their jobs are consuming. Also uses the output of pbsnodes to determine total available cpus, memory, and gpus.\n\n";
+	print "Usage: pbsusage [-s (m,o,p,w)] [-h]\n\n";
+	print "-s : Takes as an argument an 'm', 'o', 'p', or 'w' to sort by memory requested, owner, number of processors in use, or walltime requested respectively, in descending order (from highest to lowest values). If sort by owner is requested then it is sorted in ascending order alphanumerically. By default sorts by number of processors requested.\n";
+	print "-h : this help message\n";
+	die "\n";
+}
+
+if (!defined($options{s})) {
+	$options{s} = 'p';
+}
+if ($options{s} =~ /^p/) {
+	$sort = "procs";
+}
+elsif ($options{s} =~ /^m/) {
+	$sort = "mem";
+}
+elsif ($options{s} =~ /^w/) {
+	$sort = "walltime";
+}
+elsif ($options{s} =~ /^o/) {
+	$sort = "owner";
+}
+else {
+	die "Unknown sort option, try pbsusage -h\n\n";
+}
+
+die "Couldn't run qstat -f\n" unless open($qstat, "qstat -f|");
+# number of stats that are being recorded 
+$stats = 4;
+$totProcsUsed = 0;
+$totMemUsed = 0;
+$totGPUsUsed = 0;
+while ($line = <$qstat>) {
+	if ($line =~ /Job_Owner = (\w+?)\@/) {
+		$owner = $1;
+		#print "owner = $owner\n";
+		$items = 1;
+		$skip = 0;
+		next;
+	}
+	if ($line =~ /job_state = (\w)/) {
+		$jobState = $1;
+		if ($jobState eq "Q") {
+			$skip = 1;
+		}
+	}
+	if (($line =~ /Resource_List.mem = (\d+)(\w+)/) && !($skip)) {
+		$mem = $1;
+		$units = $2;
+		#print "$owner mem = $mem units = $units\n";
+		# normalize to MB
+		if ($units eq "kb") {
+			$mem = $mem / 1024;
+		}
+		if ($units eq "gb") {
+			$mem = $mem * 1024;
+		}
+		#print "$owner mem = $mem (mb)\n";
+		$totMemUsed += $mem;
+		$items++;
+	}
+	if (($line =~ /Resource_List.walltime = (\d+?):(\d+?):(\d+?)/) && !($skip)) {
+		$hours = $1;
+		$mins = $2;
+		$secs = $3;
+		#print "time  = $hours:$mins:$secs\n";
+		$items++;
+	}
+	if (($line =~ /Resource_List.nodes = (\d+?):ppn=(\d+?)/) && !($skip)) {
+		$nodes = $1;
+		$ppn = $2;
+		$totProcs = $nodes * $ppn;
+		$totProcsUsed += $totProcs;
+		#print "nodes=$nodes:ppn=$ppn\n";
+		$items++;
+	}
+	if (!exists($user{$owner}) && ($items == $stats)) {
+		$user{$owner}->{"mem"} = $mem;
+		$totSecs = $hours * 3600 + $mins * 60 + $secs;
+		$totHours = $totSecs / 3600;
+		$user{$owner}->{"walltime"} = $totHours;
+		$user{$owner}->{"procs"} = $totProcs;
+		#print "new $owner\t" . $user{$owner}->{"procs"} . "\t" . $user{$owner}->{"mem"} . "\t" . $user{$owner}->{"walltime"} . "\n";
+		$items = 0;
+	}
+	elsif ($items == $stats) {
+		$user{$owner}->{"mem"} += $mem;
+		$totSecs = $hours * 3600 + $mins * 60 + $secs;
+		$totHours = $totSecs / 3600;
+		$user{$owner}->{"walltime"} += $totHours;
+		$user{$owner}->{"procs"} += $totProcs;
+		#print "exists $owner\t" . $user{$owner}->{"procs"} . "\t" . $user{$owner}->{"mem"} . "\t" . $user{$owner}->{"walltime"} . "\n";
+		$items = 0;
+	}
+}
+close($qstat);
+
+if (keys(%user) > 0) {
+	# get pbsnodes info (mem, cpus)
+	die "Couldn't run pbsnodes\n" unless open($pbsnodes, "pbsnodes|");
+	$totProcs = 0;
+	$totMem = 0;
+	while ($line = <$pbsnodes>) {
+		if ($line =~ /state = (.+)/) {
+			$state = $1;
+			if (($state eq "free") || ($state eq "job-exclusive")) {
+				$skip = 0;	
+			}
+			else {
+				$skip = 1;
+			}
+			next;
+		}
+		if (($line =~ /np = (\d+)/) && !($skip)) {
+			$totProcs += $1;
+		}
+		if (($line =~ /status = .+?physmem=(\d+)kb/) && !($skip)) {
+			$totMem += $1;
+		}
+	}
+	$totMem /= 1024;
+	close($pbsnodes);
+
+	printf("%-12s  %-5s  %-8s  %-6s\n\n", "User", "Procs", "Mem (MB)", "Walltime (HR)");
+	if ($sort eq "owner") {
+		foreach $owner (sort {$a cmp $b} keys(%user)) {
+			printf("%-12s  %-5d  %-8d  %-4.2f\n",$owner, $user{$owner}->{"procs"}, $user{$owner}->{"mem"}, $user{$owner}->{"walltime"});
+		}
+	}
+	else {
+		foreach $owner (sort {$user{$b}->{$sort} <=> $user{$a}->{$sort}} keys(%user)) {
+			printf("%-12s  %-5d  %-8d  %-4.2f\n",$owner, $user{$owner}->{"procs"}, $user{$owner}->{"mem"}, $user{$owner}->{"walltime"});
+		}
+	}
+	print "\n";
+	print  "Total procs used     = $totProcsUsed\n";
+	print  "Total procs          = $totProcs\n";
+	printf("Total mem used (MB)  = %12.4f\n", $totMemUsed);
+	printf("Total mem      (MB)  = %12.4f\n\n", $totMem);
+}
+else {
+	print "Looks like no one is running any jobs\n\n";
+}

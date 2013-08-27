@@ -1,0 +1,4 @@
+# Author : Sabuj Pattanayek <sabujp@gmail.com>
+# Purpose : Wrapper for qstat -f and pbsnodes that lists users that are running jobs based on # of processors used, memory requested, walltime requested, etc
+# Version : git
+
