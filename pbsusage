@@ -14,8 +14,8 @@ if (defined($options{h})) {
 
 sub usage {
 	print "Wrapper for qstat that shows users and how many resources their jobs are consuming. Also uses the output of pbsnodes to determine total available cpus, memory, and gpus.\n\n";
-	print "Usage: pbsusage [-s (m,o,p,w)] [-h]\n\n";
-	print "-s : Takes as an argument an 'm', 'o', 'p', or 'w' to sort by memory requested, owner, number of processors in use, or walltime requested respectively, in descending order (from highest to lowest values). If sort by owner is requested then it is sorted in ascending order alphanumerically. By default sorts by number of processors requested.\n";
+	print "Usage: pbsusage [-s (g,m,o,p,w)] [-h]\n\n";
+	print "-s : Takes as an argument a 'g', 'm', 'o', 'p', or 'w' to sort by GPUs used, memory requested, owner, number of processors in use, or walltime requested respectively, in descending order (from highest to lowest values). If sort by owner is requested then it is sorted in ascending order alphanumerically. By default sorts by number of processors requested.\n";
 	print "-h : this help message\n";
 	die "\n";
 }
@@ -34,6 +34,9 @@ elsif ($options{s} =~ /^w/) {
 }
 elsif ($options{s} =~ /^o/) {
 	$sort = "owner";
+}
+elsif ($options{s} =~ /^g/) {
+	$sort = "gpus";
 }
 else {
 	die "Unknown sort option, try pbsusage -h\n\n";
@@ -86,6 +89,13 @@ while ($line = <$qstat>) {
 		$ppn = $2;
 		$totProcs = $nodes * $ppn;
 		$totProcsUsed += $totProcs;
+		if ($line =~ /gpus=(\d+)/) {
+			$gpus = $1;
+			$totGPUsUsed += $gpus;
+		}
+		else {
+			$gpus = 0;
+		}
 		#print "nodes=$nodes:ppn=$ppn\n";
 		$items++;
 	}
@@ -95,6 +105,7 @@ while ($line = <$qstat>) {
 		$totHours = $totSecs / 3600;
 		$user{$owner}->{"walltime"} = $totHours;
 		$user{$owner}->{"procs"} = $totProcs;
+		$user{$owner}->{"gpus"} = $gpus;
 		#print "new $owner\t" . $user{$owner}->{"procs"} . "\t" . $user{$owner}->{"mem"} . "\t" . $user{$owner}->{"walltime"} . "\n";
 		$items = 0;
 	}
@@ -104,6 +115,7 @@ while ($line = <$qstat>) {
 		$totHours = $totSecs / 3600;
 		$user{$owner}->{"walltime"} += $totHours;
 		$user{$owner}->{"procs"} += $totProcs;
+		$user{$owner}->{"gpus"} += $gpus;
 		#print "exists $owner\t" . $user{$owner}->{"procs"} . "\t" . $user{$owner}->{"mem"} . "\t" . $user{$owner}->{"walltime"} . "\n";
 		$items = 0;
 	}
@@ -115,6 +127,7 @@ if (keys(%user) > 0) {
 	die "Couldn't run pbsnodes\n" unless open($pbsnodes, "pbsnodes|");
 	$totProcs = 0;
 	$totMem = 0;
+	$totGPUs = 0;
 	while ($line = <$pbsnodes>) {
 		if ($line =~ /state = (.+)/) {
 			$state = $1;
@@ -129,6 +142,9 @@ if (keys(%user) > 0) {
 		if (($line =~ /np = (\d+)/) && !($skip)) {
 			$totProcs += $1;
 		}
+		if (($line =~ /gpus = (\d+)/) && !($skip)) {
+			$totGPUs += $1;
+		}
 		if (($line =~ /status = .+?physmem=(\d+)kb/) && !($skip)) {
 			$totMem += $1;
 		}
@@ -136,22 +152,24 @@ if (keys(%user) > 0) {
 	$totMem /= 1024;
 	close($pbsnodes);
 
-	printf("%-12s  %-5s  %-8s  %-6s\n\n", "User", "Procs", "Mem (MB)", "Walltime (HR)");
+	printf("%-12s  %-5s  %-8s  %-5s  %-6s\n\n", "User", "Procs", "Mem (MB)", "GPUs", "Walltime (HR)");
 	if ($sort eq "owner") {
 		foreach $owner (sort {$a cmp $b} keys(%user)) {
-			printf("%-12s  %-5d  %-8d  %-4.2f\n",$owner, $user{$owner}->{"procs"}, $user{$owner}->{"mem"}, $user{$owner}->{"walltime"});
+			printf("%-12s  %-5d  %-8d  %-5s  %-4.2f\n",$owner, $user{$owner}->{"procs"}, $user{$owner}->{"mem"}, $user{$owner}->{"gpus"}, $user{$owner}->{"walltime"});
 		}
 	}
 	else {
 		foreach $owner (sort {$user{$b}->{$sort} <=> $user{$a}->{$sort}} keys(%user)) {
-			printf("%-12s  %-5d  %-8d  %-4.2f\n",$owner, $user{$owner}->{"procs"}, $user{$owner}->{"mem"}, $user{$owner}->{"walltime"});
+			printf("%-12s  %-5d  %-8d  %-5s  %-4.2f\n",$owner, $user{$owner}->{"procs"}, $user{$owner}->{"mem"}, $user{$owner}->{"gpus"}, $user{$owner}->{"walltime"});
 		}
 	}
 	print "\n";
 	print  "Total procs used     = $totProcsUsed\n";
 	print  "Total procs          = $totProcs\n";
 	printf("Total mem used (MB)  = %12.4f\n", $totMemUsed);
-	printf("Total mem      (MB)  = %12.4f\n\n", $totMem);
+	printf("Total mem      (MB)  = %12.4f\n", $totMem);
+	print  "Total GPUs used      = $totGPUsUsed\n";
+	print  "Total GPUs           = $totGPUs\n\n";
 }
 else {
 	print "Looks like no one is running any jobs\n\n";
