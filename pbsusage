@@ -170,6 +170,7 @@ if (keys(%user) > 0) {
 	printf("Total mem      (MB)  = %12.4f\n", $totMem);
 	print  "Total GPUs used      = $totGPUsUsed\n";
 	print  "Total GPUs           = $totGPUs\n\n";
+	print  "See pbsusage -h for more options\n";
 }
 else {
 	print "Looks like no one is running any jobs\n\n";
