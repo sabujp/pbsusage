@@ -54,6 +54,7 @@ while ($line = <$qstat>) {
 		#print "owner = $owner\n";
 		$items = 1;
 		$skip = 0;
+		$foundNodeLine = 0;
 		next;
 	}
 	if ($line =~ /job_state = (\w)/) {
@@ -97,6 +98,21 @@ while ($line = <$qstat>) {
 			$gpus = 0;
 		}
 		#print "nodes=$nodes:ppn=$ppn\n";
+		$foundNodeLine = 1;
+		$items++;
+	}
+	if (($line =~ /Resource_List.procs = (\d+)/) && !($skip)) {
+		$totProcs = $1;
+		$totProcsUsed += $totProcs;
+		$gpus = 0;
+		$foundNodeLine = 1;
+		$items++;
+	}
+	# PBS assumes 1 proc job if you don't specify a #PBS -l nodes=1:ppn=1 or procs=1
+	if ((($items + 1) == $stats) && !($foundNodeLine)) {
+		$gpus = 0;
+		$totProcs = 1;
+		$totProcsUsed += $totProcs;
 		$items++;
 	}
 	if (!exists($user{$owner}) && ($items == $stats)) {
